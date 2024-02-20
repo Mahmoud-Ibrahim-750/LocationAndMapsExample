@@ -15,6 +15,7 @@ import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.isVisible
 import com.google.android.gms.common.api.ResolvableApiException
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
@@ -25,8 +26,20 @@ import com.google.android.gms.location.LocationSettingsRequest
 import com.google.android.gms.location.LocationSettingsResponse
 import com.google.android.gms.location.Priority
 import com.google.android.gms.location.SettingsClient
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.GoogleMap
+import com.google.android.gms.maps.SupportMapFragment
+import com.google.android.gms.maps.model.BitmapDescriptor
+import com.google.android.gms.maps.model.Circle
+import com.google.android.gms.maps.model.CircleOptions
+import com.google.android.gms.maps.model.LatLngBounds
+import com.google.android.gms.maps.model.MarkerOptions
 import com.google.android.gms.tasks.Task
+import com.google.maps.android.clustering.ClusterManager
 import com.mis.route.locationexample.databinding.ActivityMainBinding
+import com.mis.route.locationexample.places.Place
+import com.mis.route.locationexample.places.PlaceRenderer
+import com.mis.route.locationexample.places.PlacesReader
 
 class MainActivity : AppCompatActivity() {
     private var _binding: ActivityMainBinding? = null
@@ -37,6 +50,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
     private lateinit var locationRequest: LocationRequest
+    private val places: List<Place> by lazy {
+        PlacesReader(this).read()
+    }
+    private val bicycleIcon: BitmapDescriptor by lazy {
+        val color = ContextCompat.getColor(this, R.color.colorPrimary)
+        BitmapHelper.vectorToBitmap(this, R.drawable.ic_bike, color)
+    }
 
 
     private fun askForUpdate() {
@@ -68,6 +88,21 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         _binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        val mapFragment =
+            this.supportFragmentManager.findFragmentById(R.id.map_fragment) as? SupportMapFragment
+        mapFragment?.getMapAsync { googleMap ->
+            // Ensure all places are visible in the map.
+            googleMap.setOnMapLoadedCallback {
+                val bounds = LatLngBounds.builder()
+                places.forEach { bounds.include(it.latLng) }
+                googleMap.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds.build(), 20))
+            }
+            addClusteredMarkers(googleMap)
+//            googleMap.setInfoWindowAdapter(MarkerInfoWindowAdapter(this)) // ClusterManager also calls setInfoWindowAdapter() internally
+            addMarkers(googleMap)
+        }
+
 
         locationPermissionRationaleDialog = createDialog(
             "Permission Required",
@@ -138,7 +173,81 @@ class MainActivity : AppCompatActivity() {
                 )
             }
         }
+        binding.startListeningBtn.setOnLongClickListener {
+            binding.startListeningBtn.isVisible = false
+            true
+        }
 
+    }
+
+    /**
+     * Adds markers to the map with clustering support.
+     */
+    private fun addClusteredMarkers(googleMap: GoogleMap) {
+        // Create the ClusterManager class and set the custom renderer.
+        val clusterManager = ClusterManager<Place>(this, googleMap)
+        clusterManager.renderer = PlaceRenderer(this, googleMap, clusterManager)
+
+        // Set custom info window adapter
+        clusterManager.markerCollection.setInfoWindowAdapter(MarkerInfoWindowAdapter(this))
+
+        // Add the places to the ClusterManager.
+        clusterManager.addItems(places)
+        clusterManager.cluster()
+        // show a circle around a marker when clicked
+        clusterManager.setOnClusterItemClickListener { item ->
+            addCircle(googleMap, item)
+            return@setOnClusterItemClickListener false // returned from this method to indicate that this method has not consumed this event.
+        }
+
+        // Set ClusterManager as the OnCameraIdleListener so that it
+        // can re-cluster when zooming in and out.
+        googleMap.setOnCameraIdleListener {
+            // When the camera stops moving, change the alpha value back to opaque.
+            clusterManager.markerCollection.markers.forEach { it.alpha = 1.0f }
+            clusterManager.clusterMarkerCollection.markers.forEach { it.alpha = 1.0f }
+
+            // Call clusterManager.onCameraIdle() when the camera stops moving so that re-clustering
+            // can be performed when the camera stops moving.
+            clusterManager.onCameraIdle()
+        }
+
+        // When the camera starts moving, change the alpha value of the marker to translucent.
+        googleMap.setOnCameraMoveStartedListener {
+            clusterManager.markerCollection.markers.forEach { it.alpha = 0.3f }
+            clusterManager.clusterMarkerCollection.markers.forEach { it.alpha = 0.3f }
+        }
+    }
+
+    private var circle: Circle? = null
+
+    /**
+     * Adds a [Circle] around the provided [item]
+     */
+    private fun addCircle(googleMap: GoogleMap, item: Place) {
+        circle?.remove()
+        circle = googleMap.addCircle(
+            CircleOptions()
+                .center(item.latLng)
+                .radius(1000.0)
+                .fillColor(ContextCompat.getColor(this, R.color.colorPrimaryTranslucent))
+                .strokeColor(ContextCompat.getColor(this, R.color.colorPrimary))
+        )
+    }
+
+
+    private fun addMarkers(googleMap: GoogleMap) {
+        places.forEach { place ->
+            val marker = googleMap.addMarker(
+                MarkerOptions()
+                    .title(place.name)
+                    .position(place.latLng)
+                    .icon(bicycleIcon)
+            )
+
+            // Set place as the tag on the marker object so it can be referenced within MarkerInfoWindowAdapter
+            marker?.tag = place
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.S)

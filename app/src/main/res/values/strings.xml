@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">LocationExample</string>
     <string name="start_location_updates_listening">Start Location Updates Listening</string>
+    <string name="rating">Rating: %.2f</string>
 </resources>
