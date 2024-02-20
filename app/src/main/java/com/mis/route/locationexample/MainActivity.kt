@@ -16,6 +16,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
+import androidx.lifecycle.lifecycleScope
 import com.google.android.gms.common.api.ResolvableApiException
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
@@ -31,11 +32,13 @@ import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.SupportMapFragment
 import com.google.android.gms.maps.model.BitmapDescriptor
 import com.google.android.gms.maps.model.Circle
-import com.google.android.gms.maps.model.CircleOptions
 import com.google.android.gms.maps.model.LatLngBounds
-import com.google.android.gms.maps.model.MarkerOptions
 import com.google.android.gms.tasks.Task
 import com.google.maps.android.clustering.ClusterManager
+import com.google.maps.android.ktx.addCircle
+import com.google.maps.android.ktx.addMarker
+import com.google.maps.android.ktx.awaitMap
+import com.google.maps.android.ktx.awaitMapLoad
 import com.mis.route.locationexample.databinding.ActivityMainBinding
 import com.mis.route.locationexample.places.Place
 import com.mis.route.locationexample.places.PlaceRenderer
@@ -90,14 +93,19 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         val mapFragment =
-            this.supportFragmentManager.findFragmentById(R.id.map_fragment) as? SupportMapFragment
-        mapFragment?.getMapAsync { googleMap ->
-            // Ensure all places are visible in the map.
-            googleMap.setOnMapLoadedCallback {
-                val bounds = LatLngBounds.builder()
-                places.forEach { bounds.include(it.latLng) }
-                googleMap.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds.build(), 20))
-            }
+            supportFragmentManager.findFragmentById(R.id.map_fragment) as? SupportMapFragment
+        lifecycleScope.launchWhenCreated {
+            // Get map
+            val googleMap = mapFragment?.awaitMap() ?: return@launchWhenCreated
+
+            // Wait for map to finish loading
+            googleMap.awaitMapLoad()
+
+            // Ensure all places are visible in the map
+            val bounds = LatLngBounds.builder()
+            places.forEach { bounds.include(it.latLng) }
+            googleMap.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds.build(), 20))
+
             addClusteredMarkers(googleMap)
 //            googleMap.setInfoWindowAdapter(MarkerInfoWindowAdapter(this)) // ClusterManager also calls setInfoWindowAdapter() internally
             addMarkers(googleMap)
@@ -226,29 +234,32 @@ class MainActivity : AppCompatActivity() {
      */
     private fun addCircle(googleMap: GoogleMap, item: Place) {
         circle?.remove()
-        circle = googleMap.addCircle(
-            CircleOptions()
-                .center(item.latLng)
-                .radius(1000.0)
-                .fillColor(ContextCompat.getColor(this, R.color.colorPrimaryTranslucent))
-                .strokeColor(ContextCompat.getColor(this, R.color.colorPrimary))
-        )
-    }
-
-
-    private fun addMarkers(googleMap: GoogleMap) {
-        places.forEach { place ->
-            val marker = googleMap.addMarker(
-                MarkerOptions()
-                    .title(place.name)
-                    .position(place.latLng)
-                    .icon(bicycleIcon)
-            )
-
-            // Set place as the tag on the marker object so it can be referenced within MarkerInfoWindowAdapter
-            marker?.tag = place
+        circle = googleMap.addCircle {
+            center(item.latLng)
+            radius(1000.0)
+            fillColor(ContextCompat.getColor(this@MainActivity, R.color.colorPrimaryTranslucent))
+            strokeColor(ContextCompat.getColor(this@MainActivity, R.color.colorPrimary))
         }
     }
+
+
+    /**
+     * Adds markers to the map. These markers won't be clustered.
+     */
+    private fun addMarkers(googleMap: GoogleMap) {
+        places.forEach { place ->
+            val marker = googleMap.addMarker {
+                title(place.name)
+                position(place.latLng)
+                icon(bicycleIcon)
+            }
+
+            // Set place as the tag on the marker object so it can be referenced within
+            // MarkerInfoWindowAdapter
+            marker.tag = place
+        }
+    }
+
 
     @RequiresApi(Build.VERSION_CODES.S)
     fun createLocationRequest() {
